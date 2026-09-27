@@ -4,9 +4,15 @@ export interface IssueRef {
   url: string;
 }
 
+export interface LabelSpec {
+  name: string;
+  color: string;
+  description: string;
+}
+
 export interface GitHub {
   listOpenIssues(labels: readonly string[]): Promise<IssueRef[]>;
-  ensureLabel(name: string): Promise<void>;
+  ensureLabel(label: LabelSpec): Promise<void>;
   comment(issueNumber: number, body: string): Promise<void>;
   removeLabel(issueNumber: number, name: string): Promise<void>;
   addLabel(issueNumber: number, name: string): Promise<void>;
@@ -56,11 +62,11 @@ export class GitHubClient implements GitHub {
     return found;
   }
 
-  async ensureLabel(name: string): Promise<void> {
+  async ensureLabel(label: LabelSpec): Promise<void> {
     const response = await this.raw("POST", `/repos/${this.repoPath}/labels`, {
-      name,
-      color: "0E8A16",
-      description: "План принят",
+      name: label.name,
+      color: label.color,
+      description: label.description,
     });
 
     if (response.ok) return;

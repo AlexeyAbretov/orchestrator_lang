@@ -1,11 +1,14 @@
 import { loadConfig } from "./env.js";
-import { buildGraph } from "./graph.js";
+import { buildTransitionGraph, transitions } from "./graph.js";
 import { GitHubClient } from "./github.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const github = new GitHubClient(config.token, config.owner, config.name);
-  const graph = buildGraph(github);
+  const graphs = transitions.map((transition) => ({
+    transition,
+    graph: buildTransitionGraph(github, transition),
+  }));
   const stop = new AbortController();
 
   console.log(
@@ -16,23 +19,25 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => stop.abort());
 
   while (!stop.signal.aborted) {
-    try {
-      const result = await graph.invoke(
-        { repo: config.repo },
-        { recursionLimit: 10_000 },
-      );
-
-      console.log(
-        `Проход завершён. passed: ${result.passed.length}, ошибок: ${result.failed.length}.`,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`Проход не удался: ${message}`);
-    }
+    Promise.all(
+      graphs.map(async ({ transition, graph }) => {
+        try {
+          const result = await graph.invoke(
+            { repo: config.repo },
+            { recursionLimit: 10_000 },
+          );
+          console.log(
+            `[${transition.name}] готово: ${result.done.length}, ошибок: ${result.failed.length}.`,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[${transition.name}] проход не удался: ${message}`);
+        }
+      }),
+    );
 
     if (stop.signal.aborted) break;
 
-    console.log(`Следующий проход через ${config.pollIntervalSeconds} с.`);
     await sleep(config.pollIntervalSeconds * 1000, stop.signal);
   }
 
