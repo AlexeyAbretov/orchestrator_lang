@@ -1,13 +1,14 @@
 import { loadConfig } from "./env.js";
-import { buildTransitionGraph, transitions } from "./graph.js";
+import { buildTransitionGraph, InFlightIssues, transitions } from "./graph.js";
 import { GitHubClient } from "./github.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const github = new GitHubClient(config.token, config.owner, config.name);
+  const inFlight = new InFlightIssues();
   const graphs = transitions.map((transition) => ({
     transition,
-    graph: buildTransitionGraph(github, transition),
+    graph: buildTransitionGraph(github, transition, inFlight),
   }));
   const stop = new AbortController();
 
@@ -21,9 +22,10 @@ async function main(): Promise<void> {
   while (!stop.signal.aborted) {
     Promise.all(
       graphs.map(async ({ transition, graph }) => {
+        const token = inFlight.begin();
         try {
           const result = await graph.invoke(
-            { repo: config.repo },
+            { repo: config.repo, token },
             { recursionLimit: 10_000 },
           );
           console.log(
@@ -32,6 +34,8 @@ async function main(): Promise<void> {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[${transition.name}] проход не удался: ${message}`);
+        } finally {
+          inFlight.releaseAll(token);
         }
       }),
     );

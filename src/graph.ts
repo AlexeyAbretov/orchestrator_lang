@@ -35,6 +35,7 @@ const issueSchema = z.object({
 
 const State = new StateSchema({
   repo: z.string(),
+  token: z.number().default(0),
   issues: z.array(issueSchema).default(() => []),
   cursor: z.number().default(0),
   done: new ReducedValue(z.array(z.number()).default(() => []), {
@@ -48,6 +49,40 @@ const State = new StateSchema({
 });
 
 export type TransitionState = typeof State.State;
+
+/** Номера issue, которые уже взяты текущим проходом и не должны попасть в следующий, пока обработка не закончится. */
+export class InFlightIssues {
+  private readonly claims = new Map<number, number>();
+  private nextToken = 1;
+
+  begin(): number {
+    const token = this.nextToken;
+    this.nextToken += 1;
+    return token;
+  }
+
+  take(token: number, issues: readonly IssueRef[]): IssueRef[] {
+    const fresh: IssueRef[] = [];
+    for (const issue of issues) {
+      if (this.claims.has(issue.number)) continue;
+      this.claims.set(issue.number, token);
+      fresh.push(issue);
+    }
+    return fresh;
+  }
+
+  release(token: number, issueNumber: number): void {
+    if (this.claims.get(issueNumber) === token) {
+      this.claims.delete(issueNumber);
+    }
+  }
+
+  releaseAll(token: number): void {
+    for (const [issueNumber, owner] of this.claims) {
+      if (owner === token) this.claims.delete(issueNumber);
+    }
+  }
+}
 
 export interface Transition {
   name: string;
@@ -74,16 +109,25 @@ export const transitions: readonly Transition[] = [
   },
 ];
 
-export function buildTransitionGraph(github: GitHub, transition: Transition) {
+export function buildTransitionGraph(
+  github: GitHub,
+  transition: Transition,
+  inFlight: InFlightIssues,
+) {
   const scan = async (state: TransitionState) => {
     await github.ensureLabel(transition.to);
-    const issues: IssueRef[] = await github.listOpenIssues(transition.match);
+    
+    const listed = await github.listOpenIssues(transition.match);
+    const issues = inFlight.take(state.token, listed);
+    const skipped = listed.length - issues.length;
     const labels = transition.match.join(" и ");
+    const skippedNote =
+      skipped > 0 ? ` Пропущено ${skipped}: уже обрабатываются.` : "";
 
     console.log(
       issues.length === 0
-        ? `[${transition.name}] В ${state.repo} нет открытых issue с метками ${labels}.`
-        : `[${transition.name}] В ${state.repo} найдено ${issues.length} issue.`,
+        ? `[${transition.name}] В ${state.repo} нет новых открытых issue с метками ${labels}.${skippedNote}`
+        : `[${transition.name}] В ${state.repo} найдено ${issues.length} issue.${skippedNote}`,
     );
 
     return { issues, cursor: 0 };
@@ -91,6 +135,7 @@ export function buildTransitionGraph(github: GitHub, transition: Transition) {
 
   const mark = async (state: TransitionState) => {
     const issue = state.issues[state.cursor];
+
     if (!issue) {
       return {
         cursor: state.cursor + 1,
@@ -102,17 +147,23 @@ export function buildTransitionGraph(github: GitHub, transition: Transition) {
       await github.comment(issue.number, transition.comment);
       await github.removeLabel(issue.number, transition.from);
       await github.addLabel(issue.number, transition.to.name);
+
       console.log(
         `[${transition.name}] #${issue.number} ${issue.title}: комментарий ${transition.comment}, ${transition.from} → ${transition.to.name}`,
       );
+
       return { cursor: state.cursor + 1, done: [issue.number] };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      
       console.error(`[${transition.name}] #${issue.number} ${issue.title}: ${message}`);
+      
       return {
         cursor: state.cursor + 1,
         failed: [`#${issue.number}: ${message}`],
       };
+    } finally {
+      inFlight.release(state.token, issue.number);
     }
   };
 
