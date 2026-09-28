@@ -1,9 +1,9 @@
-import { loadConfig } from "./env.js";
-import { buildTransitionGraph, InFlightIssues, transitions } from "./graph.js";
-import { GitHubClient } from "./github.js";
+import { Config } from "./config.js";
+import { buildTransitionGraph, InFlightIssues, transitions } from "./graph/index.js";
+import { GitHubClient } from "./github/index.js";
 
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const config = new Config();
   const github = new GitHubClient(config.token, config.owner, config.name);
   const inFlight = new InFlightIssues();
   const graphs = transitions.map((transition) => ({
@@ -23,16 +23,19 @@ async function main(): Promise<void> {
     Promise.all(
       graphs.map(async ({ transition, graph }) => {
         const token = inFlight.begin();
+
         try {
           const result = await graph.invoke(
             { repo: config.repo, token },
             { recursionLimit: 10_000 },
           );
+
           console.log(
             `[${transition.name}] готово: ${result.done.length}, ошибок: ${result.failed.length}.`,
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+
           console.error(`[${transition.name}] проход не удался: ${message}`);
         } finally {
           inFlight.releaseAll(token);
@@ -40,7 +43,9 @@ async function main(): Promise<void> {
       }),
     );
 
-    if (stop.signal.aborted) break;
+    if (stop.signal.aborted) {
+      break;
+    }
 
     await sleep(config.pollIntervalSeconds * 1000, stop.signal);
   }
@@ -52,14 +57,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
       resolve();
+
       return;
     }
 
     const timer = setTimeout(resolve, ms);
+    
     signal.addEventListener(
       "abort",
       () => {
         clearTimeout(timer);
+
         resolve();
       },
       { once: true },
@@ -69,6 +77,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
+
   console.error(message);
+
   process.exitCode = 1;
 });
