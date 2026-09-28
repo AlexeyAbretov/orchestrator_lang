@@ -1,3 +1,7 @@
+// Аналитик: облачный агент Cursor в режиме plan.
+// Он читает репозиторий и issue, пишет план в комментарий
+// и переводит метку с in-analysis на to-approve.
+// Код агент не меняет: правки и pull request в настройках выключены.
 import {
   Agent,
   type ModelSelection,
@@ -20,7 +24,9 @@ import {
   type TokenCounts,
 } from "../pipeline/comments.ts";
 
+// GitHub плохо переваривает огромный комментарий, поэтому режем сами.
 const COMMENT_LIMIT = 60_000;
+// В промпт кладём не всё тело issue, чтобы не раздувать запрос.
 const PROMPT_BODY_LIMIT = 20_000;
 
 export class IssueAnalyst {
@@ -32,10 +38,13 @@ export class IssueAnalyst {
     this.github = github;
   }
 
+  // Полный разбор одной issue: агент, комментарии, смена меток.
+  // Ошибку пробрасываем наверх — граф запишет номер в failed.
   async analyze(issue: IssueRef): Promise<void> {
     const model = this.modelSelection();
     let agent: SDKAgent | undefined;
     let run: Run | undefined;
+    // true — ошибку уже написали в issue, второй раз не пишем.
     let reported = false;
 
     console.log(
@@ -43,7 +52,11 @@ export class IssueAnalyst {
     );
 
     try {
+      // В списке issue нет текста. Для промпта нужно тело.
       const details = await this.github.getIssue(issue.number);
+
+      // mode: "plan" — только план, без правок файлов.
+      // autoCreatePR: false ещё раз запрещает создавать pull request.
       agent = await Agent.create({
         apiKey: this.cursor.apiKey,
         name: `analyst #${details.number}`,
@@ -65,6 +78,7 @@ export class IssueAnalyst {
         },
       });
 
+      // send не ждёт конца работы. Результат забирает wait() ниже.
       run = await agent.send(analysisPrompt(details));
 
       console.log(
@@ -72,6 +86,7 @@ export class IssueAnalyst {
           `агент ${agent.agentId}, прогон ${run.id}.`,
       );
 
+      // Сразу пишем в issue, что анализ идёт и где его смотреть.
       await this.github.comment(
         details.number,
         analystComment({
@@ -82,6 +97,7 @@ export class IssueAnalyst {
       );
 
       const result = await run.wait();
+      // В ответе модель может отличаться от той, что просили.
       const resolved = result.model ?? model;
 
       if (result.status !== "finished") {
@@ -96,6 +112,7 @@ export class IssueAnalyst {
           model: resolved,
           usage: result.usage,
         });
+        // catch ниже увидит флаг и не отправит ту же ошибку ещё раз.
         reported = true;
 
         throw new Error(message);
@@ -104,6 +121,8 @@ export class IssueAnalyst {
       const plan =
         result.result?.trim() || "Агент завершился без текста анализа.";
 
+      // Три комментария: служебный статус, сам план
+      // и сигнал PIPELINE_LABELS: to-approve для графа.
       await this.github.comment(
         details.number,
         analystComment({
@@ -122,6 +141,9 @@ export class IssueAnalyst {
         pipelineLabelsComment(TO_APPROVE_LABEL),
       );
 
+      // Метки двигаем сразу, не дожидаясь следующего круга опроса.
+      // Если этот кусок упадёт, граф увидит сигнал в комментарии
+      // и сможет сам перевести issue на to-approve.
       await this.github.ensureLabel(TO_APPROVE_SPEC);
       await this.github.addLabel(details.number, TO_APPROVE_LABEL);
       await this.github.removeLabel(details.number, IN_ANALYSIS_LABEL);
@@ -131,6 +153,7 @@ export class IssueAnalyst {
           `${IN_ANALYSIS_LABEL} → ${TO_APPROVE_LABEL}.`,
       );
     } catch (error) {
+      // Если прогон ещё идёт, просим его остановиться.
       await this.stop(run);
 
       if (!reported) {
@@ -142,10 +165,13 @@ export class IssueAnalyst {
         });
       }
 
+      // Рабочие метки снимаем и ставим needs-human: нужен человек.
       await this.handToHuman(issue.number);
 
       throw error;
     } finally {
+      // Закрываем агента на стороне Cursor. Сбой закрытия только логируем:
+      // на результат анализа он уже не влияет.
       await agent?.[Symbol.asyncDispose]()?.catch((error: unknown) => {
         console.error(
           `[${IN_ANALYSIS_LABEL}] #${issue.number}: ` +
@@ -155,6 +181,7 @@ export class IssueAnalyst {
     }
   }
 
+  // Какую модель просить и включён ли быстрый режим.
   private modelSelection(): ModelSelection {
     return {
       id: this.cursor.model,
@@ -162,6 +189,7 @@ export class IssueAnalyst {
     };
   }
 
+  // Отменять можно только живой прогон и только если SDK это умеет.
   private async stop(run: Run | undefined): Promise<void> {
     if (!run || run.status !== "running" || !run.supports("cancel")) {
       return;
@@ -175,6 +203,8 @@ export class IssueAnalyst {
     });
   }
 
+  // Пишет ошибку анализа в комментарий issue.
+  // Если сам комментарий не записался, исходную ошибку не затираем.
   private async postError(
     issueNumber: number,
     error: unknown,
@@ -208,6 +238,8 @@ export class IssueAnalyst {
     }
   }
 
+  // Снимает метки анализа и ставит needs-human.
+  // to-approve тоже снимаем: план мог успеть проставиться наполовину.
   private async handToHuman(issueNumber: number): Promise<void> {
     try {
       await this.github.ensureLabel(NEEDS_HUMAN_SPEC);
@@ -228,6 +260,7 @@ export class IssueAnalyst {
   }
 }
 
+// Промпт простыми правилами: изучи код, ничего не меняй, верни план.
 function analysisPrompt(issue: IssueDetails): string {
   const description = issue.body.trim() || "Описание пустое.";
 
@@ -245,6 +278,7 @@ function analysisPrompt(issue: IssueDetails): string {
   ].join("\n");
 }
 
+// SDK может не прислать usage. Тогда в комментарии будут нули.
 function counts(usage: TokenUsage | undefined): TokenCounts {
   return {
     inputTokens: usage?.inputTokens ?? 0,
@@ -255,6 +289,7 @@ function counts(usage: TokenUsage | undefined): TokenCounts {
   };
 }
 
+// Берём fast из ответа модели. Если параметра нет — из настроек .env.
 function fastOf(model: ModelSelection, fallback: boolean): string {
   const value = model.params?.find((param) => param.id === "fast")?.value;
 
@@ -265,6 +300,7 @@ function fastOf(model: ModelSelection, fallback: boolean): string {
   return fallback ? "true" : "false";
 }
 
+// Обрезает текст и ставит пометку, что хвост не влез.
 function fit(text: string, max: number): string {
   if (text.length <= max) {
     return text;
@@ -273,6 +309,7 @@ function fit(text: string, max: number): string {
   return `${text.slice(0, max)}\n…текст обрезан.`;
 }
 
+// Короткий текст ошибки для комментария и лога. Длинный текст режем.
 function brief(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 

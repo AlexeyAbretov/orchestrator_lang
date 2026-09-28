@@ -1,3 +1,6 @@
+// Тексты, которые оркестратор пишет в комментарии issue.
+// Формат простой и стабильный: по одной из строк пайплайн
+// узнаёт, что стадию можно двигать дальше.
 export interface TokenCounts {
   inputTokens: number;
   outputTokens: number;
@@ -6,10 +9,13 @@ export interface TokenCounts {
   totalTokens: number;
 }
 
+// Строка-сигнал. Стадия to-approve ищет её среди комментариев issue.
 export function pipelineLabelsComment(label: string): string {
   return `PIPELINE_LABELS: ${label}`;
 }
 
+// Служебный комментарий аналитика: статус, id агента, модель, токены.
+// Пустые поля не печатаем, чтобы в issue не было пустых строк.
 export function analystComment(input: {
   status: "running" | "finished" | "error";
   agentId?: string;
@@ -32,6 +38,7 @@ export function analystComment(input: {
     lines.push(`runId: ${input.runId}`);
   }
 
+  // Модель и флаг fast пишем только парой: по одному они мало что говорят.
   if (input.modelId !== undefined && input.fast !== undefined) {
     lines.push(`model: ${input.modelId} fast=${input.fast}`);
   }

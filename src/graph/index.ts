@@ -1,3 +1,4 @@
+// Наружу из папки graph отдаём только то, чем пользуется точка входа.
 export { buildTransitionGraph } from "./build.ts";
 
 export type { Transition, TransitionState } from "./types.ts";

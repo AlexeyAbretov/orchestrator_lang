@@ -1,3 +1,5 @@
+// Обёртка над GitHub REST API: открытые issue, метки, комментарии.
+// Токен и репозиторий задаются один раз в конструкторе.
 import type {
   GitHub,
   GitHubComment,
@@ -19,8 +21,13 @@ export class GitHubClient implements GitHub {
     this.name = name;
   }
 
+  // Открытые issue, у которых есть все переданные метки.
+  // Страницы по 100 штук. 20 страниц — потолок, чтобы цикл не шёл вечно.
   async listOpenIssues(labels: readonly string[]): Promise<IssueRef[]> {
     const found: IssueRef[] = [];
+    // Имена кодируем по отдельности и склеиваем запятой.
+    // Запятая внутри URLSearchParams превратилась бы в %2C,
+    // а GitHub ждёт обычную запятую между метками.
     const labelQuery = labels
       .map((label) => encodeURIComponent(label))
       .join(",");
@@ -38,6 +45,8 @@ export class GitHubClient implements GitHub {
       );
 
       for (const issue of issues) {
+        // В этом списке приходят и pull request. У них есть pull_request.
+        // Нам нужны только обычные issue.
         if (issue.pull_request) {
           continue;
         }
@@ -49,6 +58,7 @@ export class GitHubClient implements GitHub {
         });
       }
 
+      // Короткий хвост страницы значит, что дальше листать нечего.
       if (issues.length < 100) {
         break;
       }
@@ -57,6 +67,7 @@ export class GitHubClient implements GitHub {
     return found;
   }
 
+  // Карточка из списка не содержит текст issue. Здесь дочитываем body.
   async getIssue(issueNumber: number): Promise<IssueDetails> {
     const issue = await githubRequest<GitHubIssue>(
       this.token,
@@ -68,10 +79,12 @@ export class GitHubClient implements GitHub {
       number: issue.number,
       title: issue.title,
       url: issue.html_url,
+      // У issue без описания GitHub отдаёт null. Нам удобнее пустая строка.
       body: issue.body ?? "",
     };
   }
 
+  // Создаёт метку. Если она уже есть, это не ошибка.
   async ensureLabel(label: LabelSpec): Promise<void> {
     const response = await githubFetch(
       this.token,
@@ -88,6 +101,7 @@ export class GitHubClient implements GitHub {
       return;
     }
 
+    // 422 — GitHub не принял тело. already_exists значит «метка уже есть».
     if (response.status === 422) {
       const body = await response.text();
 
@@ -99,6 +113,7 @@ export class GitHubClient implements GitHub {
     throw await errorFrom(response);
   }
 
+  // Пишет комментарий в issue. body — уже готовый текст.
   async comment(issueNumber: number, body: string): Promise<void> {
     await githubRequest(
       this.token,
@@ -108,6 +123,8 @@ export class GitHubClient implements GitHub {
     );
   }
 
+  // true, если среди комментариев есть строка с тем же текстом.
+  // Сравнение после trim: лишние пробелы по краям не мешают.
   async hasComment(issueNumber: number, body: string): Promise<boolean> {
     const expected = body.trim();
 
@@ -136,6 +153,7 @@ export class GitHubClient implements GitHub {
     return false;
   }
 
+  // Снимает метку. 404 тоже успех: метки уже нет, снимать нечего.
   async removeLabel(issueNumber: number, name: string): Promise<void> {
     const response = await githubFetch(
       this.token,
@@ -151,6 +169,7 @@ export class GitHubClient implements GitHub {
     throw await errorFrom(response);
   }
 
+  // Добавляет метку, не трогая остальные метки issue.
   async addLabel(issueNumber: number, name: string): Promise<void> {
     await githubRequest(
       this.token,
@@ -160,6 +179,7 @@ export class GitHubClient implements GitHub {
     );
   }
 
+  // owner/name, где обе части закодированы для URL.
   private get repo(): string {
     return repoPath(this.owner, this.name);
   }
