@@ -1,0 +1,25 @@
+---
+description: Тело if и циклов всегда в фигурных скобках
+globs: "**/*.ts"
+alwaysApply: false
+---
+
+# Фигурные скобки у if и циклов
+
+У `if`, `else`, `for`, `while` и `do` тело всегда в `{}`, даже если это одна строка.
+
+```typescript
+if (issue.pull_request) {
+  continue;
+}
+
+for (const issue of issues) {
+  fresh.push(issue);
+}
+```
+
+Оператор не стоит на одной строке с условием:
+
+```typescript
+if (issue.pull_request) continue;
+```

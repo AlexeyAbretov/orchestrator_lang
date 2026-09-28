@@ -1,6 +1,7 @@
-export { buildTransitionGraph } from "./build.js";
-export type { Transition, TransitionState } from "./types.js";
-export {
-  InFlightIssues,       
-} from "./utils.js";
-export { transitions } from "./workflow.js";
+export { buildTransitionGraph } from "./build.ts";
+
+export type { Transition, TransitionState } from "./types.ts";
+
+export { InFlightIssues } from "./utils.ts";
+
+export { createTransitions, type IssueHandler } from "./workflow.ts";

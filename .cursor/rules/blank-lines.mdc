@@ -1,0 +1,29 @@
+---
+description: Одна пустая строка между смысловыми блоками
+globs: "**/*.ts"
+alwaysApply: false
+---
+
+# Пустая строка между блоками
+
+Между соседними смысловыми блоками ровно одна пустая строка.
+Блок — соседние строки про один шаг: связанные присваивания,
+проверка, цикл, группа однотипных вызовов, возврат результата.
+
+```typescript
+const listed = await github.listOpenIssues(labels);
+
+const eligible = [];
+for (const issue of listed) {
+  if (issue.pull_request) {
+    continue;
+  }
+
+  eligible.push(issue);
+}
+
+return eligible;
+```
+
+Две пустые строки подряд не оставляй. Поля одного типа или класса
+и строки одного вызова пустой строкой не разделяй.

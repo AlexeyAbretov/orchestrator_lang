@@ -28,7 +28,11 @@ export async function githubRequest<T>(
   body?: unknown,
 ): Promise<T> {
   const response = await githubFetch(token, method, path, body);
-  if (!response.ok) throw await errorFrom(response);
+
+  if (!response.ok) {
+    throw await errorFrom(response);
+  }
+
   return (await response.json()) as T;
 }
 
@@ -37,9 +41,14 @@ export async function errorFrom(response: Response): Promise<Error> {
   const retryAfter = response.headers.get("retry-after");
   const limited =
     response.status === 403 || response.status === 429
-      ? ` GitHub ограничил запросы${retryAfter ? ` (retry-after: ${retryAfter})` : ""}.`
+      ? " GitHub ограничил запросы" +
+        `${retryAfter ? ` (retry-after: ${retryAfter})` : ""}.`
       : "";
+
   return new Error(
-    `GitHub API ${response.status} ${response.statusText}.${limited} ${body}`.trim(),
+    (
+      `GitHub API ${response.status} ${response.statusText}.` +
+      `${limited} ${body}`
+    ).trim(),
   );
 }

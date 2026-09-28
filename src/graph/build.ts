@@ -1,7 +1,7 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
-import type { GitHub } from "../github/index.js";
-import { State, type Transition, type TransitionState } from "./types.js";
-import type { InFlightIssues } from "./utils.js";
+import type { GitHub } from "../github/index.ts";
+import { State, type Transition, type TransitionState } from "./types.ts";
+import type { InFlightIssues } from "./utils.ts";
 
 export function buildTransitionGraph(
   github: GitHub,
@@ -12,52 +12,78 @@ export function buildTransitionGraph(
     await github.ensureLabel(transition.to);
 
     const listed = await github.listOpenIssues(transition.match);
-    const issues = inFlight.take(state.token, listed);
-    const skipped = listed.length - issues.length;
+
+    const eligible = [];
+    for (const issue of listed) {
+      if (transition.accept && !(await transition.accept(issue))) {
+        continue;
+      }
+
+      eligible.push(issue);
+    }
+
+    const issues = inFlight.take(state.token, eligible);
+    const skipped = eligible.length - issues.length;
+    const waiting = listed.length - eligible.length;
+
     const labels = transition.match.join(" и ");
-    const skippedNote =
-      skipped > 0 ? ` Пропущено ${skipped}: уже обрабатываются.` : "";
+    const skippedNote = skipped > 0
+      ? ` Пропущено ${skipped}: уже обрабатываются.`
+      : "";
+    const waitingNote = waiting > 0
+      ? ` Ещё ${waiting} без сигнала пайплайна.`
+      : "";
+    const headline = issues.length === 0
+      ? `В ${state.repo} нет новых открытых issue с метками ${labels}.`
+      : `В ${state.repo} найдено ${issues.length} issue.`;
 
     console.log(
-      issues.length === 0
-        ? `[${transition.name}] В ${state.repo} нет новых открытых issue с метками ${labels}.${skippedNote}`
-        : `[${transition.name}] В ${state.repo} найдено ${issues.length} issue.${skippedNote}`,
+      `[${transition.name}] ${headline}${skippedNote}${waitingNote}`,
     );
 
-    return { issues, cursor: 0 };
+    return { issues };
   };
 
   const mark = async (state: TransitionState) => {
-    const issue = state.issues[state.cursor];
+    const results = await Promise.all(
+      state.issues.map(async (issue) => {
+        try {
+          await github.removeLabel(issue.number, transition.from);
+          await github.addLabel(issue.number, transition.to.name);
 
-    if (!issue) {
-      return {
-        cursor: state.cursor + 1,
-        failed: [`Пустая позиция очереди ${state.cursor}.`],
-      };
-    }
+          console.log(
+            `[${transition.name}] #${issue.number} ${issue.title}: ` +
+              `${transition.from} → ${transition.to.name}`,
+          );
 
-    try {
-      await github.removeLabel(issue.number, transition.from);
-      await github.addLabel(issue.number, transition.to.name);
+          if (transition.after) {
+            await transition.after(issue);
+          }
 
-      console.log(
-        `[${transition.name}] #${issue.number} ${issue.title}: ${transition.from} → ${transition.to.name}`,
-      );
+          return { done: issue.number };
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
 
-      return { cursor: state.cursor + 1, done: [issue.number] };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+          console.error(
+            `[${transition.name}] #${issue.number} ${issue.title}: ${message}`,
+          );
 
-      console.error(`[${transition.name}] #${issue.number} ${issue.title}: ${message}`);
+          return { failed: `#${issue.number}: ${message}` };
+        } finally {
+          inFlight.release(state.token, issue.number);
+        }
+      }),
+    );
 
-      return {
-        cursor: state.cursor + 1,
-        failed: [`#${issue.number}: ${message}`],
-      };
-    } finally {
-      inFlight.release(state.token, issue.number);
-    }
+    return {
+      done: results.flatMap((result) =>
+        result.done === undefined ? [] : [result.done],
+      ),
+      failed: results.flatMap((result) =>
+        result.failed === undefined ? [] : [result.failed],
+      ),
+    };
   };
 
   return new StateGraph(State)
@@ -67,8 +93,6 @@ export function buildTransitionGraph(
     .addConditionalEdges("scan", (state) =>
       state.issues.length === 0 ? END : "mark",
     )
-    .addConditionalEdges("mark", (state) =>
-      state.cursor < state.issues.length ? "mark" : END,
-    )
+    .addEdge("mark", END)
     .compile();
 }

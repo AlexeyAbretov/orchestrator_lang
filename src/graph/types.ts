@@ -1,6 +1,6 @@
 import { ReducedValue, StateSchema } from "@langchain/langgraph";
 import { z } from "zod";
-import type { LabelSpec } from "../github/index.js";
+import type { IssueRef, LabelSpec } from "../github/index.ts";
 
 const issueSchema = z.object({
   number: z.number(),
@@ -12,7 +12,6 @@ export const State = new StateSchema({
   repo: z.string(),
   token: z.number().default(0),
   issues: z.array(issueSchema).default(() => []),
-  cursor: z.number().default(0),
   done: new ReducedValue(z.array(z.number()).default(() => []), {
     inputSchema: z.array(z.number()),
     reducer: (current, update) => current.concat(update),
@@ -30,4 +29,6 @@ export interface Transition {
   match: readonly string[];
   from: string;
   to: LabelSpec;
+  accept?(issue: IssueRef): Promise<boolean>;
+  after?(issue: IssueRef): Promise<void>;
 }

@@ -1,19 +1,34 @@
-import { Config } from "./config.js";
-import { buildTransitionGraph, InFlightIssues, transitions } from "./graph/index.js";
-import { GitHubClient } from "./github/index.js";
+import { IssueAnalyst } from "./analyst/index.ts";
+import { Config } from "./config.ts";
+import {
+  buildTransitionGraph,
+  createTransitions,
+  InFlightIssues,
+} from "./graph/index.ts";
+import { IN_ANALYSIS_LABEL } from "./graph/workflow.ts";
+import { GitHubClient } from "./github/index.ts";
 
 async function main(): Promise<void> {
   const config = new Config();
+
   const github = new GitHubClient(config.token, config.owner, config.name);
+  const analyst = new IssueAnalyst(config.cursor, github);
+
   const inFlight = new InFlightIssues();
-  const graphs = transitions.map((transition) => ({
-    transition,
-    graph: buildTransitionGraph(github, transition, inFlight),
-  }));
+  const graphs = createTransitions(github, {
+    [IN_ANALYSIS_LABEL]: (issue) => analyst.analyze(issue),
+  }).map(
+    (transition) => ({
+      transition,
+      graph: buildTransitionGraph(github, transition, inFlight),
+    }),
+  );
   const stop = new AbortController();
 
   console.log(
-    `Оркестратор: ${config.repo}. Проход каждые ${config.pollIntervalSeconds} с. Остановка: Ctrl+C.`,
+    `Оркестратор: ${config.repo}. ` +
+      `Проход каждые ${config.pollIntervalSeconds} с. ` +
+      "Остановка: Ctrl+C.",
   );
 
   process.on("SIGINT", () => stop.abort());
@@ -31,10 +46,12 @@ async function main(): Promise<void> {
           );
 
           console.log(
-            `[${transition.name}] готово: ${result.done.length}, ошибок: ${result.failed.length}.`,
+            `[${transition.name}] готово: ${result.done.length}, ` +
+              `ошибок: ${result.failed.length}.`,
           );
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
 
           console.error(`[${transition.name}] проход не удался: ${message}`);
         } finally {
@@ -62,7 +79,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
     }
 
     const timer = setTimeout(resolve, ms);
-    
+
     signal.addEventListener(
       "abort",
       () => {

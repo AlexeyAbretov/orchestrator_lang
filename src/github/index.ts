@@ -1,2 +1,3 @@
-export { GitHubClient } from "./client.js";
-export type { GitHub, IssueRef, LabelSpec } from "./types.js";
+export { GitHubClient } from "./client.ts";
+
+export type { GitHub, IssueDetails, IssueRef, LabelSpec } from "./types.ts";
